@@ -1,24 +1,23 @@
 ---
-title: "Prueba técnica para Data Scientist"
+title: "Análisis exploratorio de Abalone"
 output:
-  html_document: default
+  html_document: 
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    code_folding: hide
+    toc_float:
+      collapsed: false
 editor_options:
   chunk_output_type: inline
 ---
 
-Este notebook refleja mi trabajo para la prueba técnica de Sngular para el puesto de Data Scientist. 
-
-La prueba consiste en analizar los datos de [Abalon](http://archive.ics.uci.edu/ml/datasets/Abalone) y proponer un modelo predictivo para las variables Edad y Género. En primer lugar voy a explorar los datos y detectar potenciales fuentes de error para mi futuro modelo como por ejemplo: errores de formato, datos ausentes, valores atípicos. 
-A continuación exploraré posibles relaciones entre las variables. Esto me llevará a proponer tres tipos de modelos, para tres casos de variables dependientes:
-
-1. Modelo de la Edad en función de las demás variables
-3. Modelo del Género en función de las demás variables
-3. Modelo de la Edad y del Género en función de las demás variables
-
-A la hora de elegir los modelos, me voy a basar pricipalmente en su interpretabilidad. Una vez elegida la familia del modelo, me centraré en encontrar los parámetros que optimicen la métrica del error elegida. Finalmente, interpretaré brevemente los modelos. 
 
 
-```{r}
+
+```{r results='hide', message=FALSE, warning=FALSE}
+# Librerías utilizadas en este notebook
+# Las instalo si es necesario. De lo contrario sólo las cargo
 for (package in c('readr', 'plyr', 'ggplot2', 'reshape2','grid', 'gridExtra' , 'GGally')) {
     if (!require(package, character.only=T, quietly=T)) {
         install.packages(package)
@@ -30,41 +29,44 @@ for (package in c('readr', 'plyr', 'ggplot2', 'reshape2','grid', 'gridExtra' , '
 ```
 
 
-#Análisis exploratorio de Abalone
 
-## Obtención de datos y de la variable Edad
+# Obtención de datos y sumario
+## obtención de los datos brutos y de la variable Edad
 En primer lugar cargamos los datos y calculamos la edad en función del número de anillos.
 
 ```{r}
-abalone <- read_csv(url("http://archive.ics.uci.edu/ml/machine-learning-databases/abalone/abalone.data"), col_names = c("Sex","Length","Diameter","Height","WholeWeight","ShuckedWeight","VisceraWeight","ShellWeight","Rings"))
+abalone = read_csv("abalone_data.csv", col_names = c("Sex","Length","Diameter","Height","WholeWeight","ShuckedWeight","VisceraWeight","ShellWeight","Rings"))
 
-abalone$Age <- abalone$Rings + 1.5
-abalone$Sex <- as.factor(abalone$Sex)
+abalone$Age = abalone$Rings + 1.5
+abalone$Sex = as.factor(abalone$Sex)
+
+head(abalone)
 ```
 
-## Análisis descriptivo de los datos
-### Sumario de los datos
+## Sumario de los datos
 ```{r}
 summary(abalone)
+```
 
-# Frecuencia de aparición de cada nivel del factor Género
+Frecuencia de aparición de cada nivel del factor Género:
+```{r}
 count(abalone$Sex)[2] / sum(count(abalone$Sex)[2]) * 100
 
 ```
 
 Observaciones:
 
-* Parece que los tres niveles del factor Género están igualmente representados
-* La talla mínima es 0, lo que parece imposible
-* los pesos mínimos parecen también muy pequeños aunque no se puede afirmar a priori si se trata de errores en las medidas.
+* Parece que los tres niveles del factor Género están igualmente representados.
+* La altura mínima es 0, lo que parece imposible.
+* Los pesos mínimos parecen también muy pequeños aunque no se puede afirmar a priori si se trata de errores en las medidas.
 
 
 
 
-### Detección de valores atípicos o errores
+# Detección de valores atípicos o errores
 
-#### Valores atípicos
-Obersevemos las muestras con Talla nula:
+## Valores atípicos con respecto a la distribución de la muestra
+### Muestras con altura nula
 ```{r}
 abalone[abalone$Height == 0,]
 
@@ -73,16 +75,16 @@ abalone[abalone$Height == 0,]
 Las demás variables toman valores plausibles, por lo que un error en la medida de la altura parece lo más probable. Como sólo hay dos muestras en esta situación, lo más simple es eliminarlas del conjunto de datos.
 
 
-Identifiquemos si hay otros valores atípicos
+### Valores extremos
 ```{r}
-scaledAbalone <- stack(as.data.frame(scale(abalone[,-1])[,]))
+scaledAbalone = stack(as.data.frame(scale(abalone[,-1])[,]))
 
-p <- ggplot(scaledAbalone) + geom_boxplot(aes(x = ind, y = values, color=ind)) + guides(colour=FALSE)
+p = ggplot(scaledAbalone) + geom_boxplot(aes(x = ind, y = values, color=ind)) + guides(colour=FALSE)
 
 p + theme(axis.text.x = element_text(angle=20), axis.title.x = element_blank()) + ylab("Scaled values")
 ```
 
-Vemos que hay dos valores atípicos adicionales y corresponden con los dos valores superiores de la variable Talla. Podemos observar que las muestras con estas alturas no muestran valores particularmente altos en las demás variables. Por ello, vamos a eliminarlos también de nuestro conjunto de datos. 
+Vemos que hay dos valores atípicos adicionales y corresponden con los dos valores superiores de la variable Altura. Podemos observar que las muestras con estas alturas no muestran valores particularmente altos en las demás variables. Por ello, vamos a eliminarlos también de nuestro conjunto de datos. 
 
 ```{r}
 threshold = tail(sort(unique(abalone$Height)),2)[1]
@@ -92,39 +94,39 @@ abalone[abalone$Height >= threshold,]
 ```
 
 ```{r}
-abaloneClean <- abalone[(abalone$Height>0) & (abalone$Height < threshold),]
+abaloneClean = abalone[(abalone$Height>0) & (abalone$Height < threshold),]
 ```
 
-#### Coherencia en los pesos
+## Coherencia en los pesos
 Podemos aplicar ciertas restricciones lógicas entre las diferentes medidas de pesos:
 
 * El peso de la carne incluye el peso de las visceras, por lo tanto debe ser superior
-* El peso total debe ser superior a cada una de las otras medidas de peso y además debe ser superior a la suma entre el peso del abalone pelado "Shucked Weight" y de la concha deshidratada "ShellWeight".
+* El peso total debe ser superior a cada una de las otras medidas de peso y además debe ser superior a la suma entre el peso del abalone sin concha "Shucked Weight" y de la concha seca "ShellWeight".
 
 Podemos eliminar los datos que no cumplen estas condiciones, aplicando una pequeña tolerancia:
 ```{r}
 
-p1<-qplot(WholeWeight, ShuckedWeight+ShellWeight, 
+p1=qplot(WholeWeight, ShuckedWeight+ShellWeight, 
       data = abalone, 
       color = Sex) +
   geom_abline(slope = 1)
 
-p2<-qplot(WholeWeight, ShuckedWeight, 
+p2=qplot(WholeWeight, ShuckedWeight, 
       data = abalone, 
       color = Sex) +
   geom_abline(slope = 1)
 
-p3<-qplot(WholeWeight, ShellWeight, 
+p3=qplot(WholeWeight, ShellWeight, 
       data = abalone, 
       color = Sex) +
   geom_abline(slope = 1)
 
-p4<-qplot(WholeWeight, VisceraWeight, 
+p4=qplot(WholeWeight, VisceraWeight, 
       data = abalone, 
       color = Sex) +
   geom_abline(slope = 1)
 
-p5<-qplot(ShuckedWeight, VisceraWeight, 
+p5=qplot(ShuckedWeight, VisceraWeight, 
       data = abalone, 
       color = Sex) +
   geom_abline(slope = 1)
@@ -136,52 +138,50 @@ grid.arrange(p1, p2, p3, p4, p5, ncol = 2, bottom = "Restricciones en las medida
 ```{r}
 # Permitimos 1% de error
 tol = 0.01
-abaloneClean<-abaloneClean[(tol + 1.  > abaloneClean$VisceraWeight / abaloneClean$ShuckedWeight) &
+abaloneClean=abaloneClean[(tol + 1.  > abaloneClean$VisceraWeight / abaloneClean$ShuckedWeight) &
                            (tol + 1. > abaloneClean$VisceraWeight / abaloneClean$WholeWeight) &
                            (tol + 1. > abaloneClean$ShuckedWeight / abaloneClean$WholeWeight) &
                            (tol + 1. > abaloneClean$ShellWeight / abaloneClean$WholeWeight) &
                            (tol + 1. > (abaloneClean$ShellWeight + abaloneClean$ShuckedWeight)/abaloneClean$WholeWeight) ,]
 
-paste("Hemos eliminado un total de:", nrow(abalone) - nrow(abaloneClean), "lineas" )
-
-p1<-qplot(WholeWeight, ShuckedWeight+ShellWeight, 
+p1=qplot(WholeWeight, ShuckedWeight+ShellWeight, 
       data = abaloneClean, 
       color = Sex) +
   geom_abline(slope = 1)
 
-p2<-qplot(WholeWeight, ShuckedWeight, 
+p2=qplot(WholeWeight, ShuckedWeight, 
       data = abaloneClean, 
       color = Sex) +
   geom_abline(slope = 1)
 
-p3<-qplot(WholeWeight, ShellWeight, 
+p3=qplot(WholeWeight, ShellWeight, 
       data = abaloneClean, 
       color = Sex) +
   geom_abline(slope = 1)
 
-p4<-qplot(WholeWeight, VisceraWeight, 
+p4=qplot(WholeWeight, VisceraWeight, 
       data = abaloneClean, 
       color = Sex) +
   geom_abline(slope = 1)
 
-p5<-qplot(ShuckedWeight, VisceraWeight, 
+p5=qplot(ShuckedWeight, VisceraWeight, 
       data = abaloneClean, 
       color = Sex) +
   geom_abline(slope = 1)
 
-grid.arrange(p1, p2, p3, p4, p5, ncol = 2, bottom = "Restricciones en las medidas de los pesos después de limpiar los datos")
+grid.arrange(p1, p2, p3, p4, p5, ncol = 2, bottom = "Restricciones en las medidas de los pesos tras limpiar los datos")
 
 ```
 
-#### Coherencia en las dimensiones espaciales
+## Coherencia en las dimensiones espaciales
 De la misma manera que hemos establecido ciertas restricciones relacionadas con las medidas de los pesos, podríamos establecer restricciones en función de la forma o dimensiones de los abalones. En este caso, sólo contamos con tres medidas espaciales: la altura, el diámetro y la longitud.
 
 ```{r}
-p1<-qplot(Height, Diameter, 
+p1=qplot(Height, Diameter, 
       data = abaloneClean, 
       color = Sex)
 
-p2<-qplot(Height, Length, 
+p2=qplot(Height, Length, 
       data = abaloneClean, 
       color = Sex)
 
@@ -191,13 +191,17 @@ grid.arrange(p1, p2,ncol = 1, bottom = "Restricciones en las medidas espaciales"
 
 Aunque es complicado establecer un filtro lógico sobre la forma del abalon, hay un valor que parece claramente atípico y que eliminamos.
 ```{r}
-abaloneClean <- abaloneClean[!(abaloneClean$Height<0.02 & abaloneClean$Length>0.6),]
+abaloneClean = abaloneClean[!(abaloneClean$Height<0.02 & abaloneClean$Length>0.6),]
 
 ```
 
+En total hemos eliminados este número de muestras: 
+```{r} 
+nrow(abalone) - nrow(abaloneClean)
+```
 
-### Distribución de cada variable
-
+# Distribución de las variables y relaciones entre ellas
+## Distribución de cada variable
 ```{r}
 ggplot(melt(abaloneClean[,-1]),aes(x = value), fill=variable) + 
     geom_histogram(bins = 28) +
@@ -225,36 +229,45 @@ ggpairs(abaloneClean, aes(colour = Sex, alpha = 0.3), title="Pairs plot for abal
 
 ```{r}
 cat("Pearson correlation:\n")
-ab_cors <- cor(abaloneClean[ , 2:9], method="pearson")
-ab_cors
+cor(abaloneClean[ , 2:9], method="pearson")
+
 cat("Spearman correlation:\n")
-ab_cors <- cor(abaloneClean[ , 2:9], method="spearman")
-ab_cors
+cor(abaloneClean[ , 2:9], method="spearman")
+
 ```
 
 Puesto que la relación entre las variables espaciales y de peso parece logarítmica, transformemos los datos y estudiemos de nuevo las relaciones entre variables.
 
 ```{r}
-abaloneLog <-abaloneClean
-abaloneLog[,2:8] <- log10(abaloneLog[,2:8])
+abaloneLog =abaloneClean
+abaloneLog[,2:8] = log10(abaloneLog[,2:8])
 
 ggpairs(abaloneLog, aes(colour = Sex, alpha = 0.3), title="Pairs plot for abalone dataset",
         upper = list(continuous = wrap("cor", size = 2)), lower = list(combo = wrap("facethist", binwidth = 0.8))) + 
   theme_grey(base_size = 8)
 ```
+
 ```{r}
-pearson_cors <- cor(abaloneLog[ , 2:9], method="pearson")
 cat("Pearson correlation:\n")
-pearson_cors
+cor(abaloneLog[ , 2:9], method="pearson")
+
+
 cat("Spearman correlation:\n")
-spearman_cors <- cor(abaloneLog[ , 2:9], method="spearman")
-spearman_cors
+cor(abaloneLog[ , 2:9], method="spearman")
 ```
 
 
 Efectivamente, la heterocedasticidad entre las variables ha disminuido y las correlaciones han aumentado con la transformación logarítmica. 
 
-##Conclusión del análisis descriptivo
+La desviación de las variables independientes parece aumentar con el valor de la Edad. Podríamos aplicar la transformación logarítmica a la Edad si queremos obtener residuos homocedásticos en modelos de regresión lineal. 
 
-Las variables independientes parecen altamente correlacionadas entre sí y presentan una menor correlación con la edad. Además, las variables no parecen normales. 
-En modelos de regresión, debemos tener especial cuidado con los efectos de multicolinealidad y hetoredasticidades en los errores. Nuevas variables no relacionadas ni con las dimensiones ni con el peso de los abalones tales como el origen de los abalones, su alimentación o presencia de depredadores, ayudarían a enriquecer los modelos para la predicción de la edad y el sexo.
+# Conclusión del análisis descriptivo
+
+Hemos eliminado 22 muestras del conjunto de datos inicial por haberlas identificado como atípicas o erróneas. Las variables independientes parecen altamente correlacionadas entre sí y presentan una menor correlación con la edad. Además, las variables no parecen normales. 
+
+En modelos de regresión, debemos tener especial cuidado con los efectos de multicolinealidad y hetoredasticidades en los errores. Parece útil transformar la salida con el logaritmo para disminuir la heterocedasticidad de los residuos. Nuevas variables no relacionadas ni con las dimensiones ni con el peso de los abalones tales como el origen de los abalones, su alimentación o presencia de depredadores, ayudarían a enriquecer los modelos para la predicción de la edad y el sexo.
+
+```{r}
+# Guardamos los datos corregidos para entrenar nuestros modelos
+save(abaloneClean, file = "abaloneCorregido.Rdata")
+```

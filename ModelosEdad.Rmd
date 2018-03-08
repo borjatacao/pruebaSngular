@@ -1,0 +1,191 @@
+---
+title: "Modelo para la predicción de la Edad"
+output:
+  html_document: 
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    code_folding: hide
+    toc_float:
+      collapsed: false
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r results='hide', message=FALSE, warning=FALSE}
+# Librerías utilizadas en este notebook
+# Las instalo si es necesario. De lo contrario sólo las cargo
+for (package in c('ggplot2', 'reshape2', 'glmnet', 'knitr')) {
+    if (!require(package, character.only=T, quietly=T)) {
+        install.packages(package)
+        library(package, character.only=T)
+    }
+}
+
+
+```
+
+```{r results='hide', message=FALSE, warning=FALSE}
+ calculateRMSE = function(yhat, y){
+  return( mean((yhat - y)^2) )
+ }
+
+calculateAdjR2 = function(yhat, y, nVar){
+  return( 1 - calculateRMSE(yhat, y) / mean((y - mean(y))^2) * 
+              (length(y) - 1) / (length(y) - nVar - 1) )
+}
+
+calculateResults = function(yhat, y, train, test, nVar, modelName){
+
+  
+  return ( data.frame( "Modelo"  = c(modelName),
+                "ECM Entrenamiento"= c(calculateRMSE(yhat[train], y[train])),
+                "ECM Test"= c(calculateRMSE(yhat[test], y[test])), 
+                "R2 adjustado Entrenamiento"= c(calculateAdjR2(yhat[train], y[train], nVar)),
+                "R2 adjustado Test"= c(calculateAdjR2(yhat[test], y[test], nVar))) )
+  
+}
+
+showResults = function (results){
+    kable(results, digits = 4,format = 'markdown')
+}
+```
+
+# Generación de nuevas variables para reducir la colinealidad
+Como hemos analizado durante el [análisis exploratorio](./AnalisisExploratorio.html) de Abalone, las variables independientes están muy relacionadas entre sí. Vamos a tratar de crear nuevas variables que resuman el contenido de las demás. De esta forma, podemos reducir las dimensiones de nuestros modelos mientras mantenemos la mayor cantidad de información posible.
+
+```{r}
+load("abaloneCorregido.Rdata")
+
+# Eliminamos la variable Anillos porque la hemos sustituido por Edad
+abaloneClean = subset(abaloneClean, select=-c(Rings))
+
+```
+
+
+## Nuevas variables dependientes del peso
+```{r}
+abaloneNewFeat = abaloneClean
+abaloneNewFeat$WeightGeoMean = (abaloneClean$WholeWeight * abaloneClean$ShuckedWeight * abaloneClean$VisceraWeight * abaloneClean$ShellWeight)^(1/4)
+
+abaloneNewFeat$WeightNorm = sqrt(abaloneClean$WholeWeight^2 + abaloneClean$ShuckedWeight^2 + abaloneClean$VisceraWeight^2 + abaloneClean$ShellWeight^2)
+
+p=ggplot(melt(abaloneNewFeat[,(ncol(abaloneNewFeat)-1):ncol(abaloneNewFeat)]),aes(x = value), fill=variable) + geom_boxplot(aes(x = variable, y = value, color=variable)) + guides(colour=FALSE)
+
+p + theme(axis.title.x = element_blank()) + ylab("Nuevas variables de peso")
+
+```
+
+## Nuevas variables dependientes de variables espaciales
+```{r}
+abaloneNewFeat$Volume = (abaloneClean$Length * abaloneClean$Diameter * abaloneClean$Height)
+
+abaloneNewFeat$SizeGeoMean = (abaloneClean$Length * abaloneClean$Diameter * abaloneClean$Height)^(1/3)
+
+abaloneNewFeat$SizeGeoNorm = sqrt(abaloneClean$Length^2 + abaloneClean$Diameter^2 + abaloneClean$Height^2 )
+
+summary (abaloneNewFeat[, (ncol(abaloneNewFeat)-2):ncol(abaloneNewFeat)])
+
+scaledAbalone = stack(as.data.frame(scale(abaloneNewFeat[, (ncol(abaloneNewFeat)-2):ncol(abaloneNewFeat)])))
+
+p =ggplot(scaledAbalone) + geom_boxplot(aes(x = ind, y = values, color=ind)) + guides(colour=FALSE)
+
+p + theme(axis.title.x = element_blank()) + ylab("Nuevas variables espaciales")
+
+```
+
+## Nuevas variables dependientes del peso y el volumen
+```{r}
+abaloneNewFeat$Density = abaloneClean$WholeWeight/(abaloneClean$Length * abaloneClean$Diameter * abaloneClean$Height)
+
+abaloneNewFeat$DensityShucked = abaloneClean$ShuckedWeight / (abaloneClean$Length * abaloneClean$Height)
+
+abaloneNewFeat$DensityShell = abaloneClean$ShellWeight / (abaloneClean$Diameter^2)
+
+summary (abaloneNewFeat[, (ncol(abaloneNewFeat)-2):ncol(abaloneNewFeat)])
+
+scaledAbalone = stack(as.data.frame(scale(abaloneNewFeat[, (ncol(abaloneNewFeat)-2):ncol(abaloneNewFeat)])))
+
+p =ggplot(scaledAbalone) + geom_boxplot(aes(x = ind, y = values, color=ind)) + guides(colour=FALSE)
+
+p + theme(axis.title.x = element_blank()) + ylab("Nuevas variables de densidad")
+```
+
+```{r}
+
+set.seed(1)
+# División del conjunto de datos en entrenamiento y test en la proporción 70/30
+train = sample(1:nrow(abaloneClean), nrow(abaloneClean)*0.7)
+Ntrain = length(train)
+test = (-train)
+Ntest = nrow(abaloneClean) - Ntrain
+```
+
+# Modelos de regresión múltiple
+## Conjunto de test y de entrenamiento
+
+
+## Regresión múltiple
+### Sin las nuevas variables
+```{r}
+
+lm.fit = lm(Age ~. , data=abaloneClean[train,])
+
+summary(lm.fit)
+```
+Eliminamos las variables con grandes p-valores (>0.01):
+
+```{r}
+
+lm.fit = lm(Age ~. -Length , data=abaloneClean[train,])
+
+summary(lm.fit)
+
+  showResults(calculateResults(predict(lm.fit, abaloneClean), abaloneClean$Age, train, test, length(lm.fit$coefficients) - 1, "Regresion Lineal"))
+  
+  par(mfrow = c(2, 2))
+  plot(lm.fit)
+  par(mfrow = c(1, 1))
+
+```
+
+Observamos como los errores no son normales. Por el contrario, como ya apuntamos en el [análisis exploratorio](./AnalisisExploratorio.html), la desviación parece aumentar con el valor de la variable dependiente. Proponemos por lo tanto transformar la variable de salida con logaritmos.
+
+## Regresión con el método de Lasso
+Vamos a elegir el valor del parámetro $\alpha$ del método de Lasso que minimice el error cuadrático por validación cruzada.
+```{r}
+# Generación de los valores de lambda y separacíon de la matrix de entradas y el vector de salida
+
+#abaloneClean = subset(abaloneClean, select=-c(Rings))
+
+grid = 10^seq(2,-6, length=100)
+x = model.matrix(Age~., abaloneNewFeat)
+y = abaloneClean$Age
+```
+
+```{r}
+# Generación del modelo de Lasso
+lasso.mod = glmnet(x[train,], y[train], alpha=1, lambda=grid)
+plot(lasso.mod)
+```
+
+```{r}
+# Obtención del valor de lambda que minimiza el error cuadrático medio por validación cruzada con n=10
+set.seed(1)
+cv.out = cv.glmnet(x[train,], y[train], alpha=1, lambda=grid, nfolds=10)
+plot(cv.out)
+
+# Elegimos lambda que minimiza el error cuadratico medio
+bestLambda = cv.out$lambda.1se
+coef(lasso.mod,s=bestLambda)
+
+
+# Cálculo del Error cuadrático medio del modelo en el conjunto de entrenamiento y de test
+Dvar = cv.out$nzero[cv.out$lambda == bestLambda]
+
+showResults(calculateResults(predict(lasso.mod,s=bestLambda,newx=x), y, train, test, Dvar, "Regresion Lasso"))
+
+```
+
+
+## Regresión con PCA

@@ -1,0 +1,29 @@
+---
+title: "Readme"
+author: "Borja Gonzalez"
+date: "3/7/2018"
+output: html_document
+---
+# Notebooks para la prueba técnica de Sngular
+
+
+En este repositorio he guardado varios notebooks en R para la prueba técnica de Sngular, puesto de Data Scientist.
+
+La prueba consiste en analizar los datos de [Abalon](http://archive.ics.uci.edu/ml/datasets/Abalone) y proponer un modelo predictivo para las variables Edad y Género. 
+
+Cada notebook responde a una parte del problema:
+
+1. **Exploraración de los datos **
+
+    En [este notebook](./AnalisisExploratorio.html) empiezo explorando los datos y detectando potenciales fuentes de error para mi futuro modelo como por ejemplo: errores de formato, datos ausentes, valores atípicos. 
+A continuación busco posibles relaciones entre las variables. 
+
+2. **Modelización **
+    
+    He diseñado tres tipos de modelos, para tres casos de variables dependientes:
+
+    1. Modelo de la Edad en función de las demás variables
+    2. Modelo del Género en función de las demás variables
+    3. Modelo de la Edad y del Género en función de las demás variables
+
+A la hora de elegir los modelos, me baso pricipalmente en su interpretabilidad. Una vez elegida la familia del modelo, me centro en encontrar los parámetros que optimizan la métrica del error elegida. Finalmente, interpreto brevemente los modelos. 
