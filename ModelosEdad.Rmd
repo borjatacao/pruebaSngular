@@ -15,7 +15,7 @@ editor_options:
 ```{r results='hide', message=FALSE, warning=FALSE}
 # Librerías utilizadas en este notebook
 # Las instalo si es necesario. De lo contrario sólo las cargo
-for (package in c('ggplot2', 'reshape2', 'glmnet', 'knitr')) {
+for (package in c('ggplot2', 'reshape2', 'glmnet', 'knitr', 'GGally','rockchalk', 'MASS', 'caret')) {
     if (!require(package, character.only=T, quietly=T)) {
         install.packages(package)
         library(package, character.only=T)
@@ -37,17 +37,60 @@ calculateAdjR2 = function(yhat, y, nVar){
 
 calculateResults = function(yhat, y, train, test, nVar, modelName){
 
-  
-  return ( data.frame( "Modelo"  = c(modelName),
+  ret = data.frame( "Modelo"  = c(modelName),
                 "ECM Entrenamiento"= c(calculateRMSE(yhat[train], y[train])),
                 "ECM Test"= c(calculateRMSE(yhat[test], y[test])), 
                 "R2 adjustado Entrenamiento"= c(calculateAdjR2(yhat[train], y[train], nVar)),
-                "R2 adjustado Test"= c(calculateAdjR2(yhat[test], y[test], nVar))) )
+                "R2 adjustado Test"= c(calculateAdjR2(yhat[test], y[test], nVar))) 
+  return ( ret )
   
 }
 
 showResults = function (results){
-    kable(results, digits = 4,format = 'markdown')
+    kable(results[sort(results$ECM.Test),], digits = 4,format = 'markdown')
+}
+
+getBestResult = function(fitCaret) {
+  best = which(rownames(fitCaret$results) == rownames(fitCaret$bestTune))
+  bestResult = fitCaret$results[best, ]
+  rownames(bestResult) = NULL
+  return (bestResult)
+}
+
+# Función publicada en https://rpubs.com/therimalaya/43190
+diagPlot<-function(model){
+    p1<-ggplot(model, aes(.fitted, .resid))+geom_point()
+    p1<-p1+stat_smooth(method="loess")+geom_hline(yintercept=0, col="red", linetype="dashed")
+    p1<-p1+xlab("Fitted values")+ylab("Residuals")
+    p1<-p1+ggtitle("Residual vs Fitted Plot")+theme_bw()
+    
+    p2<-ggplot(model, aes(qqnorm(.stdresid)[[1]], .stdresid))+geom_point(na.rm = TRUE)
+    p2<-p2+geom_abline(aes(qqline(.stdresid)))+xlab("Theoretical Quantiles")+ylab("Standardized Residuals")
+    p2<-p2+ggtitle("Normal Q-Q")+theme_bw()
+    
+    p3<-ggplot(model, aes(.fitted, sqrt(abs(.stdresid))))+geom_point(na.rm=TRUE)
+    p3<-p3+stat_smooth(method="loess", na.rm = TRUE)+xlab("Fitted Value")
+    p3<-p3+ylab(expression(sqrt("|Standardized residuals|")))
+    p3<-p3+ggtitle("Scale-Location")+theme_bw()
+    
+    p4<-ggplot(model, aes(seq_along(.cooksd), .cooksd))+geom_bar(stat="identity", position="identity")
+    p4<-p4+xlab("Obs. Number")+ylab("Cook's distance")
+    p4<-p4+ggtitle("Cook's distance")+theme_bw()
+    
+    p5<-ggplot(model, aes(.hat, .stdresid))+geom_point(aes(size=.cooksd), na.rm=TRUE)
+    p5<-p5+stat_smooth(method="loess", na.rm=TRUE)
+    p5<-p5+xlab("Leverage")+ylab("Standardized Residuals")
+    p5<-p5+ggtitle("Residual vs Leverage Plot")
+    p5<-p5+scale_size_continuous("Cook's Distance", range=c(1,5))
+    p5<-p5+theme_bw()+theme(legend.position="bottom")
+    
+    p6<-ggplot(model, aes(.hat, .cooksd))+geom_point(na.rm=TRUE)+stat_smooth(method="loess", na.rm=TRUE)
+    p6<-p6+xlab("Leverage hii")+ylab("Cook's Distance")
+    p6<-p6+ggtitle("Cook's dist vs Leverage hii/(1-hii)")
+    p6<-p6+geom_abline(slope=seq(0,3,0.5), color="gray", linetype="dashed")
+    p6<-p6+theme_bw()
+    
+    return(list(rvfPlot=p1, qqPlot=p2, sclLocPlot=p3, cdPlot=p4, rvlevPlot=p5, cvlPlot=p6))
 }
 ```
 
@@ -110,9 +153,18 @@ p =ggplot(scaledAbalone) + geom_boxplot(aes(x = ind, y = values, color=ind)) + g
 
 p + theme(axis.title.x = element_blank()) + ylab("Nuevas variables de densidad")
 ```
+```{r}
+abaloneNewFeat$Infancy = combineLevels(abaloneNewFeat$Sex,levs = c("F", "M"), newLabel = c("A") )
+```
 
 ```{r}
 
+# ggpairs(abaloneNewFeat[,-1:-7], aes(colour = Infancy, alpha = 0.3), title="Pairs plot for abalone dataset",
+#         upper = list(continuous = wrap("cor", size = 2)), lower = list(combo = wrap("facethist", binwidth = 0.8))) + 
+#   theme_grey(base_size = 8)
+```
+
+```{r}
 set.seed(1)
 # División del conjunto de datos en entrenamiento y test en la proporción 70/30
 train = sample(1:nrow(abaloneClean), nrow(abaloneClean)*0.7)
@@ -126,40 +178,83 @@ Ntest = nrow(abaloneClean) - Ntrain
 
 
 ## Regresión múltiple
-### Sin las nuevas variables
+### Simple
 ```{r}
 
 lm.fit = lm(Age ~. , data=abaloneClean[train,])
-
 summary(lm.fit)
 ```
-Eliminamos las variables con grandes p-valores (>0.01):
+Eliminamos las variables no significativas (con grandes p-valores (>0.01)):
 
 ```{r}
 
 lm.fit = lm(Age ~. -Length , data=abaloneClean[train,])
-
 summary(lm.fit)
 
-  showResults(calculateResults(predict(lm.fit, abaloneClean), abaloneClean$Age, train, test, length(lm.fit$coefficients) - 1, "Regresion Lineal"))
+results = calculateResults(predict(lm.fit, abaloneClean), abaloneClean$Age, train, test, length(lm.fit$coefficients) - 1, "Lineal")
+showResults(results)
   
-  par(mfrow = c(2, 2))
-  plot(lm.fit)
-  par(mfrow = c(1, 1))
+par(mfrow = c(2, 2))
+plot(lm.fit)
+par(mfrow = c(1, 1))
+  
 
 ```
 
-Observamos como los errores no son normales. Por el contrario, como ya apuntamos en el [análisis exploratorio](./AnalisisExploratorio.html), la desviación parece aumentar con el valor de la variable dependiente. Proponemos por lo tanto transformar la variable de salida con logaritmos.
+Observamos como los errores no son normales. Por el contrario, como ya apuntamos en el [análisis exploratorio](./AnalisisExploratorio.html), la desviación parece aumentar con el valor de la variable dependiente y es asimétrica, con una cola más larga a la derecha. Como sospechábamos, los residuos no son homocedásticos. Veamos el resultado de transformar los pesos y de añadir variables adicionales.
 
-## Regresión con el método de Lasso
+### Nuevas variables
+
+```{r}
+lm.fit = lm(Age ~ Infancy*(1 + Height + log(WholeWeight) + log(ShuckedWeight) + log(VisceraWeight) + log(ShellWeight)), data=abaloneNewFeat[train,])
+summary(lm.fit)
+results = rbind(results, calculateResults(predict(lm.fit, abaloneNewFeat), abaloneNewFeat$Age, train, test, length(lm.fit$coefficients) - 1, "Lineal Log"))
+
+
+lm.fit = lm(Age ~ Infancy*(1 + Height + log(WholeWeight) + log(ShuckedWeight) + log(VisceraWeight) + log(ShellWeight) + log(WeightGeoMean) + log(WeightNorm) + Volume + SizeGeoNorm + SizeGeoMean + DensityShell + DensityShucked + Density), data=abaloneNewFeat[train,])
+summary(lm.fit)
+results = rbind(results, calculateResults(predict(lm.fit, abaloneNewFeat), abaloneNewFeat$Age, train, test, length(lm.fit$coefficients) - 1, "Nuevas variables"))
+
+lm.fit = lm(Age ~ Infancy*(1 + log(WholeWeight) + log(VisceraWeight) + Volume), data=abaloneNewFeat[train,])
+summary(lm.fit)
+results = rbind(results, calculateResults(predict(lm.fit, abaloneNewFeat), abaloneNewFeat$Age, train, test, length(lm.fit$coefficients) - 1, "Subconjunto nuevas variables"))
+
+showResults(results)
+
+par(mfrow = c(2, 2))
+plot(lm.fit)
+par(mfrow = c(1, 1))
+
+```
+Aunque obtenemos un menor error, la forma de los residuos no parece haber cambiado demasiado. 
+### Regresión robusta
+
+Probemos asignando pesos diferentes a los residuos con regresión robusta 
+```{r}
+lm.fit = rlm(Age ~ Infancy*(1 + Height + log(WholeWeight) + log(ShuckedWeight) + log(VisceraWeight) + log(ShellWeight)), data=abaloneNewFeat[train,])
+summary(lm.fit)
+results = rbind(results, calculateResults(predict(lm.fit, abaloneNewFeat), abaloneNewFeat$Age, train, test, length(lm.fit$coefficients) - 1, "Robusta"))
+```
+
+
+
+## Regresión con los métodos de Lasso y Ridge
+### Generar todas las variables de interés
+```{r}
+abaloneNewFeat$LogWhole = log(abaloneNewFeat$WholeWeight)
+abaloneNewFeat$LogShucked = log(abaloneNewFeat$ShuckedWeight)
+abaloneNewFeat$LogViscera = log(abaloneNewFeat$VisceraWeight)
+abaloneNewFeat$LogShell = log(abaloneNewFeat$ShellWeight)
+```
+
+
+### Método de Lasso
 Vamos a elegir el valor del parámetro $\alpha$ del método de Lasso que minimice el error cuadrático por validación cruzada.
 ```{r}
-# Generación de los valores de lambda y separacíon de la matrix de entradas y el vector de salida
-
-#abaloneClean = subset(abaloneClean, select=-c(Rings))
+# Generación de los valores de lambda y separacion de la matrix de entradas y el vector de salida
 
 grid = 10^seq(2,-6, length=100)
-x = model.matrix(Age~., abaloneNewFeat)
+x = model.matrix(Age~.^2, abaloneNewFeat[,-1])
 y = abaloneClean$Age
 ```
 
@@ -183,7 +278,82 @@ coef(lasso.mod,s=bestLambda)
 # Cálculo del Error cuadrático medio del modelo en el conjunto de entrenamiento y de test
 Dvar = cv.out$nzero[cv.out$lambda == bestLambda]
 
-showResults(calculateResults(predict(lasso.mod,s=bestLambda,newx=x), y, train, test, Dvar, "Regresion Lasso"))
+results = rbind(results, calculateResults(predict(lasso.mod,s=bestLambda,newx=x), y, train, test, Dvar, "Lasso"))
+
+showResults(results)
+```
+### Método de Ridge
+
+```{r}
+# Generación del modelo de red elástica
+ridge.mod = glmnet(x[train,], y[train], alpha=0, lambda=grid)
+plot(ridge.mod)
+```
+
+```{r}
+# Obtención del valor de lambda que minimiza el error cuadrático medio por validación cruzada con n=10
+set.seed(1)
+cv.out = cv.glmnet(x[train,], y[train], alpha=0, lambda=grid, nfolds=10)
+plot(cv.out)
+
+# Elegimos lambda que minimiza el error cuadratico medio dentro de una desviacion estandar
+bestLambda = cv.out$lambda.1se
+coef(ridge.mod,s=bestLambda)
+
+
+# Cálculo del Error cuadrático medio del modelo en el conjunto de entrenamiento y de test
+Dvar = cv.out$nzero[cv.out$lambda == bestLambda]
+
+results = rbind(results, calculateResults(predict(ridge.mod,s=bestLambda,newx=x), y, train, test, Dvar, "Ridge"))
+
+showResults(results)
+```
+### Método Elastic Net
+
+```{r}
+# Generación del modelo de red elástica
+cv_10 = trainControl(method = "cv", number = 10)
+
+elnet.mod = train(
+  Age~.^2, data = abaloneNewFeat[,-1],
+  method = "glmnet",
+  trControl = cv_10,
+  tuneLength = 10
+)
+
+caretBestResult = getBestResult(elnet.mod)
+
+
+elnet.mod = glmnet(x[train,], y[train], alpha=caretBestResult$alpha, lambda=caretBestResult$lambda)
+
+# Initializzacion con el modelo de Ridge
+# minRSME = min(cv.out$cvm)
+# bestAlpha = 0
+# bestModel = cv.out
+# 
+# for (i_alpha in seq(0,1, length=10)) {
+#     cv.out = cv.glmnet(x[train,], y[train], lambda=grid, nfolds=10, alpha=i_alpha)
+#     if(min(cv.out$cvm) < minRSME){
+#         bestModel = cv.out
+#         bestAlpha = i_alpha
+#         minRSME = min(cv.out$cvm)
+#     } 
+# }
+# 
+# 
+# # Elegimos el lambda que minimiza el error cuadratico medio dentro de una desviacion estandar
+# bestLambda = bestModel$lambda.1se
+# elnet.mod = glmnet(x[train,], y[train], alpha=bestAlpha, lambda=bestLambda)
+# coef(elnet.mod)
+
+
+# Cálculo del Error cuadrático medio del modelo en el conjunto de entrenamiento y de test
+#Dvar = cv.out$nzero[bestModel$lambda == bestLambda]
+
+Dvar = sum(coef(elnet.mod)==0)
+results = rbind(results, calculateResults(predict(elnet.mod,s=bestLambda,newx=x), y, train, test, Dvar, "Elastic Net"))
+
+showResults(results)
 
 ```
 
