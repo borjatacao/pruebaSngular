@@ -1,5 +1,5 @@
 ---
-title: "Modelo para la predicción de la Edad"
+title: "Modelos para la predicción de la Edad como un problema de regresión"
 output:
   html_document: 
     toc: true
@@ -15,13 +15,15 @@ editor_options:
 ```{r results='hide', message=FALSE, warning=FALSE}
 # Librerías utilizadas en este notebook
 # Las instalo si es necesario. De lo contrario sólo las cargo
-for (package in c('ggplot2', 'reshape2', 'glmnet', 'knitr', 'GGally','rockchalk', 'MASS', 'caret')) {
+for (package in c('ggplot2', 'reshape2', 'glmnet', 'knitr', 'GGally','rockchalk', 'MASS', 'caret', 'pls', 'tree', 'randomForest', 'gbm', 'sigmoid')) {
     if (!require(package, character.only=T, quietly=T)) {
         install.packages(package)
         library(package, character.only=T)
     }
 }
 
+# Fijar la semilla para reproducir los métodos aleatorios
+set.seed(1)
 
 ```
 
@@ -30,24 +32,38 @@ for (package in c('ggplot2', 'reshape2', 'glmnet', 'knitr', 'GGally','rockchalk'
   return( mean((yhat - y)^2) )
  }
 
+calculateaAccuracy = function(yhat, y){
+  return( sum(abs(yhat - y) <= 0.5 ) / length(yhat) * 100)
+ }
+
 calculateAdjR2 = function(yhat, y, nVar){
   return( 1 - calculateRMSE(yhat, y) / mean((y - mean(y))^2) * 
               (length(y) - 1) / (length(y) - nVar - 1) )
 }
 
-calculateResults = function(yhat, y, train, test, nVar, modelName){
-
-  ret = data.frame( "Modelo"  = c(modelName),
-                "ECM Entrenamiento"= c(calculateRMSE(yhat[train], y[train])),
-                "ECM Test"= c(calculateRMSE(yhat[test], y[test])), 
-                "R2 adjustado Entrenamiento"= c(calculateAdjR2(yhat[train], y[train], nVar)),
-                "R2 adjustado Test"= c(calculateAdjR2(yhat[test], y[test], nVar))) 
+calculateResults = function(yhat, y, train, test, modelName, nVar){
+  if(missing(nVar)){
+    R2Test = NA
+    R2Train = NA
+  }
+  else{
+    R2Train = calculateAdjR2(yhat[train], y[train], nVar)
+    R2Test  = calculateAdjR2(yhat[test], y[test], nVar)
+  }
+  ret = data.frame( "Modelo"  = modelName,
+                "Acc Entr" = calculateaAccuracy(yhat[train], y[train]),
+                "Acc Test" = calculateaAccuracy(yhat[test], y[test]),
+                "ECM Entr"= calculateRMSE(yhat[train], y[train]),
+                "ECM Test"= calculateRMSE(yhat[test], y[test]) ,
+                "R2 adj Entr"= R2Train,
+                "R2 adj Test"= R2Test
+                )
   return ( ret )
   
 }
 
 showResults = function (results){
-    kable(results[sort(results$ECM.Test),], digits = 4,format = 'markdown')
+    kable(results[order(results$ECM.Test),], digits = 4,format = 'markdown', row.names = FALSE)
 }
 
 getBestResult = function(fitCaret) {
@@ -57,41 +73,13 @@ getBestResult = function(fitCaret) {
   return (bestResult)
 }
 
-# Función publicada en https://rpubs.com/therimalaya/43190
-diagPlot<-function(model){
-    p1<-ggplot(model, aes(.fitted, .resid))+geom_point()
-    p1<-p1+stat_smooth(method="loess")+geom_hline(yintercept=0, col="red", linetype="dashed")
-    p1<-p1+xlab("Fitted values")+ylab("Residuals")
-    p1<-p1+ggtitle("Residual vs Fitted Plot")+theme_bw()
-    
-    p2<-ggplot(model, aes(qqnorm(.stdresid)[[1]], .stdresid))+geom_point(na.rm = TRUE)
-    p2<-p2+geom_abline(aes(qqline(.stdresid)))+xlab("Theoretical Quantiles")+ylab("Standardized Residuals")
-    p2<-p2+ggtitle("Normal Q-Q")+theme_bw()
-    
-    p3<-ggplot(model, aes(.fitted, sqrt(abs(.stdresid))))+geom_point(na.rm=TRUE)
-    p3<-p3+stat_smooth(method="loess", na.rm = TRUE)+xlab("Fitted Value")
-    p3<-p3+ylab(expression(sqrt("|Standardized residuals|")))
-    p3<-p3+ggtitle("Scale-Location")+theme_bw()
-    
-    p4<-ggplot(model, aes(seq_along(.cooksd), .cooksd))+geom_bar(stat="identity", position="identity")
-    p4<-p4+xlab("Obs. Number")+ylab("Cook's distance")
-    p4<-p4+ggtitle("Cook's distance")+theme_bw()
-    
-    p5<-ggplot(model, aes(.hat, .stdresid))+geom_point(aes(size=.cooksd), na.rm=TRUE)
-    p5<-p5+stat_smooth(method="loess", na.rm=TRUE)
-    p5<-p5+xlab("Leverage")+ylab("Standardized Residuals")
-    p5<-p5+ggtitle("Residual vs Leverage Plot")
-    p5<-p5+scale_size_continuous("Cook's Distance", range=c(1,5))
-    p5<-p5+theme_bw()+theme(legend.position="bottom")
-    
-    p6<-ggplot(model, aes(.hat, .cooksd))+geom_point(na.rm=TRUE)+stat_smooth(method="loess", na.rm=TRUE)
-    p6<-p6+xlab("Leverage hii")+ylab("Cook's Distance")
-    p6<-p6+ggtitle("Cook's dist vs Leverage hii/(1-hii)")
-    p6<-p6+geom_abline(slope=seq(0,3,0.5), color="gray", linetype="dashed")
-    p6<-p6+theme_bw()
-    
-    return(list(rvfPlot=p1, qqPlot=p2, sclLocPlot=p3, cdPlot=p4, rvlevPlot=p5, cvlPlot=p6))
+plotModel = function(model){
+  par(mfrow = c(2, 2))
+  plot(model)
+  par(mfrow = c(1,1))
 }
+
+
 ```
 
 # Generación de nuevas variables para reducir la colinealidad
@@ -99,10 +87,6 @@ Como hemos analizado durante el [análisis exploratorio](./AnalisisExploratorio.h
 
 ```{r}
 load("abaloneCorregido.Rdata")
-
-# Eliminamos la variable Anillos porque la hemos sustituido por Edad
-abaloneClean = subset(abaloneClean, select=-c(Rings))
-
 ```
 
 
@@ -153,98 +137,180 @@ p =ggplot(scaledAbalone) + geom_boxplot(aes(x = ind, y = values, color=ind)) + g
 
 p + theme(axis.title.x = element_blank()) + ylab("Nuevas variables de densidad")
 ```
+## Género
+ En los siguientes pairplots observamos que no parece grandes diferencias entre las dstribuciones de las variables para hembras y machos. Sin embargo el nivel I sí parece engendrar distribuciones muy diferentes. Por lo tanto vamos a sustituir la variable género por Infancia
 ```{r}
 abaloneNewFeat$Infancy = combineLevels(abaloneNewFeat$Sex,levs = c("F", "M"), newLabel = c("A") )
+abaloneNewFeat = subset(abaloneNewFeat, select=-c(Sex))
+
+abaloneClean$Infancy = abaloneNewFeat$Infancy
+abaloneClean = subset(abaloneClean, select=-c(Sex))
 ```
 
 ```{r}
 
-# ggpairs(abaloneNewFeat[,-1:-7], aes(colour = Infancy, alpha = 0.3), title="Pairs plot for abalone dataset",
-#         upper = list(continuous = wrap("cor", size = 2)), lower = list(combo = wrap("facethist", binwidth = 0.8))) + 
-#   theme_grey(base_size = 8)
+ggpairs(abaloneNewFeat[,-1:-7], aes(colour = Infancy, alpha = 0.3), title="Pairs plot for abalone dataset",
+        upper = list(continuous = wrap("cor", size = 2)), lower = list(combo = wrap("facethist", binwidth = 0.8))) +
+  theme_grey(base_size = 8)
 ```
 
+
+# Árboles de decisión para regresión
+## Conjunto de test y de entrenamiento
 ```{r}
-set.seed(1)
-# División del conjunto de datos en entrenamiento y test en la proporción 70/30
-train = sample(1:nrow(abaloneClean), nrow(abaloneClean)*0.7)
+# Muestro estratificado del conjunto de datos en entrenamiento y test en la proporción 2:1 
+train = createDataPartition(abaloneClean$Age, p = 2/3, list = FALSE)
+#train = sample(1:nrow(abaloneClean), nrow(abaloneClean)*0.7)
 Ntrain = length(train)
 test = (-train)
 Ntest = nrow(abaloneClean) - Ntrain
+
+# Eliminamos la variable Rings porque es redundante con Age
+abaloneNewFeat = subset(abaloneNewFeat, select=-c(Rings))
 ```
 
-# Modelos de regresión múltiple
-## Conjunto de test y de entrenamiento
+### Arboles de decisión, Random Forest y boosting
+Aunque los árboles de decisión son fáciles de interpretar, suelen ser muy sensibles al conjunto de entrenamiento. Técnicas como bagging o boosting producen modelos más robustos pero de interpretación más complicada.
+Sin embargo, suponen una excelente manera de identificar las variables que mayor influencia ejercen sobre la salida.
 
-
-## Regresión múltiple
-### Simple
 ```{r}
 
-lm.fit = lm(Age ~. , data=abaloneClean[train,])
+formulaTrees = Age ~ .
+
+tree.mod = tree(formulaTrees, data = abaloneNewFeat[train,])
+
+summary(tree.mod)
+
+plot(tree.mod)
+text(tree.mod, pretty=0)
+
+cv.mod = cv.tree(tree.mod)
+plot(cv.mod$size, cv.mod$dev, type = 'b')
+
+results = calculateResults(predict(tree.mod, newdata = abaloneNewFeat), abaloneNewFeat$Age, train, test, "Arbol simple")
+
+
+```
+
+```{r}
+rf.mod = randomForest(formulaTrees, data = abaloneNewFeat[train,], importance=TRUE)
+
+results = rbind(results,
+                calculateResults(predict(rf.mod, newdata = abaloneNewFeat), abaloneNewFeat$Age, train, test, "Random Forest"))
+
+
+importance(rf.mod)
+```
+
+```{r}
+boost.mod = gbm(formulaTrees , data = abaloneNewFeat[train,], distribution="gaussian", interaction.depth = 4, n.trees = 9000, shrinkage = 0.005, cv.folds = 5, n.cores = 4)
+
+predictBoostNTrees = gbm.perf(boost.mod)
+results = rbind(results, calculateResults(predict(boost.mod, newdata = abaloneNewFeat, n.trees = predictBoostNTrees), abaloneNewFeat$Age, train, test, "Boosting"))
+
+```
+
+```{r}
+results = rbind(results, calculateResults(predict(boost.mod, newdata = abaloneNewFeat, n.trees = predictBoostNTrees), abaloneNewFeat$Age, train, test, "Boosting"))
+
+showResults(results)
+```
+
+Vemos que las variables más influyentes indpendientemente de la técnica utilizada están particularmente relacionadas con la concha: DensityShell, ShellWeight y en tercer lugar DensityShucked. Por ello, deberemos centrarnos en estas variables a la hora de diseñar los modelos de regresión lineal.
+
+# Modelos de regresión
+
+## Regresión múltiple
+
+En primer lugar empezaremos con las variables inicialmente disponibles, para luego extender el modelo a las nuevas variables.
+
+### Variables iniciales
+```{r}
+
+lm.fit = lm(Age ~. - Rings, data = abaloneClean[train,])
 summary(lm.fit)
 ```
 Eliminamos las variables no significativas (con grandes p-valores (>0.01)):
 
 ```{r}
-
-lm.fit = lm(Age ~. -Length , data=abaloneClean[train,])
+formula = Age ~. - Length - Rings
+lm.fit = lm(formula , data=abaloneClean[train,])
 summary(lm.fit)
 
-results = calculateResults(predict(lm.fit, abaloneClean), abaloneClean$Age, train, test, length(lm.fit$coefficients) - 1, "Lineal")
-showResults(results)
-  
-par(mfrow = c(2, 2))
-plot(lm.fit)
-par(mfrow = c(1, 1))
-  
+results = rbind(results,
+calculateResults(predict(lm.fit, abaloneClean), abaloneClean$Age, train, test, "Variables iniciales", length(lm.fit$coefficients) - 1))
+
+plotModel(lm.fit)
+
 
 ```
+#### Corrección de la heterocedasticidad
+Observamos como los errores no son normales. Por el contrario, como ya apuntamos en el [análisis exploratorio](./AnalisisExploratorio.html), la desviación parece aumentar con el valor de la variable dependiente y es asimétrica, con una cola más larga a la derecha. Como sospechábamos, los residuos no son homocedásticos. Veamos el resultado de transformar los pesos y de transformar la variable dependiente.
 
-Observamos como los errores no son normales. Por el contrario, como ya apuntamos en el [análisis exploratorio](./AnalisisExploratorio.html), la desviación parece aumentar con el valor de la variable dependiente y es asimétrica, con una cola más larga a la derecha. Como sospechábamos, los residuos no son homocedásticos. Veamos el resultado de transformar los pesos y de añadir variables adicionales.
+```{r}
+wts <- 1/fitted(lm(abs(residuals(lm.fit)) ~ fitted(lm.fit)))^2
+wlm.fit = lm(formula, data=abaloneClean[train,], weights = wts)
+summary(wlm.fit)
+plotModel(wlm.fit)
+
+results = rbind(results, calculateResults(predict(wlm.fit, abaloneClean), abaloneClean$Age, train, test, "Local weights", length(wlm.fit$coefficients) - 1))
+```
+
+```{r}
+formula = Rings ~. - Age - Length
+lnlm.fit = glm(formula, data=abaloneClean[train,], family = poisson(log))
+summary(lnlm.fit)
+
+results = rbind(results, calculateResults(predict.glm(lnlm.fit, abaloneClean, type = "response"), abaloneClean$Rings, train, test, "log linear", length(lnlm.fit$coefficients) - 1))
+showResults(results)
+plotModel(lnlm.fit)
+
+sqrtlm.fit = glm(formula, data=abaloneClean[train,], family = poisson(sqrt))
+summary(lnlm.fit)
+
+results = rbind(results, calculateResults(predict.glm(sqrtlm.fit, abaloneClean, type = "response"), abaloneClean$Rings, train, test, "sqrt linear", length(sqrtlm.fit$coefficients) - 1))
+plotModel(sqrtlm.fit)
+```
+
+
 
 ### Nuevas variables
 
 ```{r}
 lm.fit = lm(Age ~ Infancy*(1 + Height + log(WholeWeight) + log(ShuckedWeight) + log(VisceraWeight) + log(ShellWeight)), data=abaloneNewFeat[train,])
 summary(lm.fit)
-results = rbind(results, calculateResults(predict(lm.fit, abaloneNewFeat), abaloneNewFeat$Age, train, test, length(lm.fit$coefficients) - 1, "Lineal Log"))
+results = rbind(results, calculateResults(predict(lm.fit, abaloneNewFeat), abaloneNewFeat$Age, train, test, "Lineal Log", length(lm.fit$coefficients) - 1))
 
 
-lm.fit = lm(Age ~ Infancy*(1 + Height + log(WholeWeight) + log(ShuckedWeight) + log(VisceraWeight) + log(ShellWeight) + log(WeightGeoMean) + log(WeightNorm) + Volume + SizeGeoNorm + SizeGeoMean + DensityShell + DensityShucked + Density), data=abaloneNewFeat[train,])
+lm.fit = lm(Age ~ Infancy*(1 + Height + log(WholeWeight) + log(ShuckedWeight) + log(VisceraWeight) + log(ShellWeight) + log(WeightNorm) + Volume + SizeGeoNorm + SizeGeoMean + DensityShell + DensityShucked + Density), data=abaloneNewFeat[train,])
 summary(lm.fit)
-results = rbind(results, calculateResults(predict(lm.fit, abaloneNewFeat), abaloneNewFeat$Age, train, test, length(lm.fit$coefficients) - 1, "Nuevas variables"))
+results = rbind(results, calculateResults(predict(lm.fit, abaloneNewFeat), abaloneNewFeat$Age, train, test, "Nuevas variables", length(lm.fit$coefficients) - 1))
 
-lm.fit = lm(Age ~ Infancy*(1 + log(WholeWeight) + log(VisceraWeight) + Volume), data=abaloneNewFeat[train,])
+lm.fit = lm(Age ~ Infancy*(1 + log(ShuckedWeight) + log(VisceraWeight) + log(WeightNorm) + Volume), data=abaloneNewFeat[train,])
 summary(lm.fit)
-results = rbind(results, calculateResults(predict(lm.fit, abaloneNewFeat), abaloneNewFeat$Age, train, test, length(lm.fit$coefficients) - 1, "Subconjunto nuevas variables"))
+results = rbind(results, calculateResults(predict(lm.fit, abaloneNewFeat), abaloneNewFeat$Age, train, test, "Subconjunto nuevas variables", length(lm.fit$coefficients) - 1))
 
-showResults(results)
 
-par(mfrow = c(2, 2))
-plot(lm.fit)
-par(mfrow = c(1, 1))
+plotModel(lm.fit)
 
-```
-Aunque obtenemos un menor error, la forma de los residuos no parece haber cambiado demasiado. 
-### Regresión robusta
-
-Probemos asignando pesos diferentes a los residuos con regresión robusta 
-```{r}
-lm.fit = rlm(Age ~ Infancy*(1 + Height + log(WholeWeight) + log(ShuckedWeight) + log(VisceraWeight) + log(ShellWeight)), data=abaloneNewFeat[train,])
-summary(lm.fit)
-results = rbind(results, calculateResults(predict(lm.fit, abaloneNewFeat), abaloneNewFeat$Age, train, test, length(lm.fit$coefficients) - 1, "Robusta"))
 ```
 
 
 
-## Regresión con los métodos de Lasso y Ridge
+## Reduccion de dimensionalidad y colinealidad
+Tratemos ahora de resolver el problema de colinealidad entre las variables.
+
 ### Generar todas las variables de interés
 ```{r}
 abaloneNewFeat$LogWhole = log(abaloneNewFeat$WholeWeight)
 abaloneNewFeat$LogShucked = log(abaloneNewFeat$ShuckedWeight)
 abaloneNewFeat$LogViscera = log(abaloneNewFeat$VisceraWeight)
 abaloneNewFeat$LogShell = log(abaloneNewFeat$ShellWeight)
+
+abaloneNewFeat$Expole = exp(I(-abaloneNewFeat$WholeWeight))
+abaloneNewFeat$ExpShucked = exp(-abaloneNewFeat$ShuckedWeight)
+abaloneNewFeat$ExpViscera = exp(-abaloneNewFeat$VisceraWeight)
+abaloneNewFeat$ExpShell = exp(-abaloneNewFeat$ShellWeight)
 ```
 
 
@@ -253,9 +319,9 @@ Vamos a elegir el valor del parámetro $\alpha$ del método de Lasso que minimice 
 ```{r}
 # Generación de los valores de lambda y separacion de la matrix de entradas y el vector de salida
 
-grid = 10^seq(2,-6, length=100)
-x = model.matrix(Age~.^2, abaloneNewFeat[,-1])
-y = abaloneClean$Age
+grid = 10^seq(5,-6, length=100)
+x = model.matrix(Age~.^2 , abaloneNewFeat)
+y = abaloneNewFeat$Age
 ```
 
 ```{r}
@@ -265,22 +331,18 @@ plot(lasso.mod)
 ```
 
 ```{r}
-# Obtención del valor de lambda que minimiza el error cuadrático medio por validación cruzada con n=10
-set.seed(1)
+# Obtención del valor de lambda que minimiza el ECM por validación cruzada con n=10
 cv.out = cv.glmnet(x[train,], y[train], alpha=1, lambda=grid, nfolds=10)
 plot(cv.out)
 
-# Elegimos lambda que minimiza el error cuadratico medio
+# Elegimos lambda que minimiza el ECM
 bestLambda = cv.out$lambda.1se
 coef(lasso.mod,s=bestLambda)
 
-
-# Cálculo del Error cuadrático medio del modelo en el conjunto de entrenamiento y de test
+# Cálculo del ECM de entrenamiento y de test
 Dvar = cv.out$nzero[cv.out$lambda == bestLambda]
 
-results = rbind(results, calculateResults(predict(lasso.mod,s=bestLambda,newx=x), y, train, test, Dvar, "Lasso"))
-
-showResults(results)
+results = rbind(results, calculateResults(predict(lasso.mod,s=bestLambda,newx=x), y, train, test, "Lasso", Dvar))
 ```
 ### Método de Ridge
 
@@ -292,7 +354,6 @@ plot(ridge.mod)
 
 ```{r}
 # Obtención del valor de lambda que minimiza el error cuadrático medio por validación cruzada con n=10
-set.seed(1)
 cv.out = cv.glmnet(x[train,], y[train], alpha=0, lambda=grid, nfolds=10)
 plot(cv.out)
 
@@ -304,58 +365,35 @@ coef(ridge.mod,s=bestLambda)
 # Cálculo del Error cuadrático medio del modelo en el conjunto de entrenamiento y de test
 Dvar = cv.out$nzero[cv.out$lambda == bestLambda]
 
-results = rbind(results, calculateResults(predict(ridge.mod,s=bestLambda,newx=x), y, train, test, Dvar, "Ridge"))
+results = rbind(results, calculateResults(predict(ridge.mod,s=bestLambda,newx=x), y, train, test, "Ridge", Dvar))
 
-showResults(results)
 ```
 ### Método Elastic Net
 
 ```{r}
 # Generación del modelo de red elástica
-cv_10 = trainControl(method = "cv", number = 10)
+cv_10 = trainControl(method = "cv", number = 10, selectionFunction = "oneSE")
 
-elnet.mod = train(
-  Age~.^2, data = abaloneNewFeat[,-1],
+cv.elnet = train(
+  Age ~ .^2, data = abaloneNewFeat[train,],
   method = "glmnet",
   trControl = cv_10,
-  tuneLength = 10
+  tuneLength = 20
 )
 
-caretBestResult = getBestResult(elnet.mod)
+
+elnet.mod = glmnet(x[train,], y[train], alpha=cv.elnet$bestTune$alpha, lambda=cv.elnet$bestTune$lambda)
 
 
-elnet.mod = glmnet(x[train,], y[train], alpha=caretBestResult$alpha, lambda=caretBestResult$lambda)
 
-# Initializzacion con el modelo de Ridge
-# minRSME = min(cv.out$cvm)
-# bestAlpha = 0
-# bestModel = cv.out
-# 
-# for (i_alpha in seq(0,1, length=10)) {
-#     cv.out = cv.glmnet(x[train,], y[train], lambda=grid, nfolds=10, alpha=i_alpha)
-#     if(min(cv.out$cvm) < minRSME){
-#         bestModel = cv.out
-#         bestAlpha = i_alpha
-#         minRSME = min(cv.out$cvm)
-#     } 
-# }
-# 
-# 
-# # Elegimos el lambda que minimiza el error cuadratico medio dentro de una desviacion estandar
-# bestLambda = bestModel$lambda.1se
-# elnet.mod = glmnet(x[train,], y[train], alpha=bestAlpha, lambda=bestLambda)
-# coef(elnet.mod)
-
-
-# Cálculo del Error cuadrático medio del modelo en el conjunto de entrenamiento y de test
-#Dvar = cv.out$nzero[bestModel$lambda == bestLambda]
-
-Dvar = sum(coef(elnet.mod)==0)
-results = rbind(results, calculateResults(predict(elnet.mod,s=bestLambda,newx=x), y, train, test, Dvar, "Elastic Net"))
+Dvar = sum(coef(cv.elnet$finalModel, cv.elnet$finalModel$lambdaOpt)==0)
+results = rbind(results, calculateResults(predict(elnet.mod,s=bestLambda,newx=x), y, train, test, "Elastic Net", Dvar))
 
 showResults(results)
 
 ```
 
 
-## Regresión con PCA
+
+
+
